@@ -1,0 +1,342 @@
+---
+title: "replication code"
+author: "Yao Yu"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# options(scipen = 999)
+
+library(tidyverse)
+library(lubridate)
+library(lmtest)
+library(sandwich)
+library(stargazer)
+library(igraph)
+library(Amelia)
+library(mice)
+
+# Raw data
+# data <- read_csv("data/yu_survey_data.csv")
+
+# Clean data
+data_final <- read_csv("data/yu_survey_data_final.csv")
+```
+
+# Replication Code
+
+This is the replication code for my reserach paper: Effects of Social Dominance Orientation, Party Identification, and Ideology on White American Attitudes Towards Black Lives Matter and the Police.
+
+```{r t test}
+# T-test for question order bias using full data
+t.test(blm7 ~ blm_first, data = data_final)
+t.test(police_fav7 ~ blm_first, data = data_final)
+
+# T-test for question order bias using only White respondents
+t.test(blm7 ~ blm_first, data = data_final %>% filter(race == 1))
+t.test(police_fav7 ~ blm_first, data = data_final %>% filter(race == 1))
+```
+
+```{r blm models, results='asis'}
+# Creating the three OLS models for estimating BLM favorability
+blm_demographics <- lm(blm7 ~ blm_first + female + age + salary + educ + police_fav7, 
+                       data = data_final)
+blm_all <- lm(blm7 ~ blm_first + female + age + salary + educ + police_fav7 + 
+                sdo7 + pid3 + ideo7, 
+              data = data_final)
+blm_whites <- lm(blm7 ~ blm_first + female + age + salary + educ + police_fav7 + 
+                   sdo7 + pid3 + ideo7, 
+                 data = data_final %>% filter(race == 1))
+
+# Robust standard errors
+blm_demographics_robust_se <- vcovHC(blm_demographics, type = "HC1") %>% diag() %>% sqrt()
+blm_all_robust_se <- vcovHC(blm_all, type = "HC1") %>% diag() %>% sqrt()
+blm_whites_robust_se <- vcovHC(blm_whites, type = "HC1") %>% diag() %>% sqrt()
+
+# Table 1
+stargazer(blm_demographics, blm_all, blm_whites, header = FALSE,
+          se = list(blm_demographics_robust_se,
+                    blm_all_robust_se,
+                    blm_whites_robust_se),
+          dep.var.labels = c("Attitudes towards BLM"),
+          column.labels = c("Demographics/Control", "All", "Whites Only"),
+          covariate.labels = c("BLM Questions First", "Female", "Age",
+                               "Salary", "Education", "Police Favorability", "SDO",
+                               "Party ID", "Ideology", "Constant"),
+          title = "Regression Models Estimating Attitudes Towards Black Lives Matter")
+# OLS regression estimates shown with robust standard errors. Models 1 uses the demographic and control variables to create a baseline model to build off of. Models 2 and 3 adds in the party, ideology, and social dominance orientation variables for the whole sample and then only White Americans.
+```
+
+```{r police models, results='asis'}
+# Creating the three OLS models for estimating BLM favorability
+police_demographics <- lm(police_fav7 ~ blm_first + female + age + salary + educ + blm7, 
+                          data = data_final)
+police_all <- lm(police_fav7 ~ blm_first + female + age + salary + educ + blm7 + 
+                   sdo7 + pid3 + ideo7, 
+                 data = data_final)
+police_whites <- lm(police_fav7 ~ blm_first + female + age + salary + educ + blm7 + 
+                      sdo7 + pid3 + ideo7, 
+                    data = data_final %>% filter(race == 1))
+
+# Robust standard errors
+police_demographics_robust_se <- vcovHC(police_demographics, type = "HC1") %>% diag() %>% sqrt()
+police_all_robust_se <- vcovHC(police_all, type = "HC1") %>% diag() %>% sqrt()
+police_whites_robust_se <- vcovHC(police_whites, type = "HC1") %>% diag() %>% sqrt()
+
+# Table 2
+stargazer(police_demographics, police_all, police_whites, header = FALSE,
+          se = list(police_demographics_robust_se,
+                    police_all_robust_se,
+                    police_whites_robust_se),
+          dep.var.labels = c("Favorability towards the Police"),
+          column.labels = c("Demographics/Control", "All", "Whites Only"),
+          covariate.labels = c("BLM Questions First", "Female", "Age",
+                               "Salary", "Education", "BLM Favorability", "SDO",
+                               "Party ID", "Ideology", "Constant"),
+          title = "Regression Models Estimating Favorability Towards the Police")
+```
+
+```{r heteroskedasticity}
+# Test for heteroskedasticity
+# Not necessary, but still end up using robust standard errors to be safe
+bptest(blm_all)
+bptest(blm_whites)
+
+bptest(police_all)
+bptest(police_whites)
+```
+
+# Additional code
+
+```{r data cleaning, eval=FALSE}
+# Cleaning the data
+data_clean <- data %>% 
+  select(V1, sdo_1:sdo_16, blm_fav_Yu_1:police_fav_Yu_9, RO.BR.FL_31,
+         Birth.Year, Country, Education, English, Gender, Hispanic, Housing,
+         Ideo.scale.con:Ideo.scale.lib, Ideology, Live.in.US, Marital, Occupation,
+         Party, Party.2, Party.scale.dem:Party.scale.rep, Race, Religion, Salary,
+         Zip.Code:Zip.Code.2) %>% 
+  filter(Country == "United States of America") %>% 
+  # Dropping a respondent who did not respond to enough sdo questions
+  filter(!V1 %in% c("R_udAI45y4WMbImCl")) %>% 
+  # Dropping respondents who responded that they were both conservative and liberal
+  filter(!V1 %in% c("R_1DZTc7dayIUh19K", "R_2uBWJBZCL3XOVU9")) %>% 
+  # Dropping respondents who did not answer the blm or police questions
+  filter(!is.na(RO.BR.FL_31)) %>% 
+  # High sdo questions
+  mutate_at(.vars = c("sdo_1", "sdo_2", "sdo_3", "sdo_4",
+                      "sdo_9", "sdo_10", "sdo_11", "sdo_12"), 
+            ~case_when(
+              . == "Strongly oppose" ~ 1,
+              . == "Somewhat oppose" ~ 2,
+              . == "Slightly oppose" ~ 3,
+              . == "Neutral" ~ 4,
+              . == "Slightly favor" ~ 5,
+              . == "Somewhat favor" ~ 6,
+              . == "Strongly favor" ~ 7
+              )) %>%
+  # Low sdo questions
+  mutate_at(.vars = c("sdo_5", "sdo_6", "sdo_7", "sdo_8",
+                      "sdo_13", "sdo_14", "sdo_15", "sdo_16"), 
+            ~case_when(
+              . == "Strongly oppose" ~ 7,
+              . == "Somewhat oppose" ~ 6,
+              . == "Slightly oppose" ~ 5,
+              . == "Neutral" ~ 4,
+              . == "Slightly favor" ~ 3,
+              . == "Somewhat favor" ~ 2,
+              . == "Strongly favor" ~ 1
+              )) %>%
+  # sdo7 scale
+  mutate(sdo7 = rowMeans(select(., starts_with("sdo_")), na.rm = TRUE)) %>% 
+  # favor blm questions
+  mutate_at(.vars = c("blm_fav_Yu_1", "blm_fav_Yu_3", "blm_fav_Yu_4", "blm_fav_Yu_5"), 
+            ~case_when(
+              . == "Strongly oppose" ~ 1,
+              . == "Moderately oppose" ~ 2,
+              . == "Slightly oppose" ~ 3,
+              . == "Neither favor nor oppose" ~ 4,
+              . == "Slightly favor" ~ 5,
+              . == "Moderately favor" ~ 6,
+              . == "Strongly favor" ~ 7)) %>% 
+  # oppose blm questions
+  mutate_at(.vars = c("blm_fav_Yu_2", "blm_fav_Yu_6"), 
+            ~case_when(
+              . == "Strongly oppose" ~ 7,
+              . == "Moderately oppose" ~ 6,
+              . == "Slightly oppose" ~ 5,
+              . == "Neither favor nor oppose" ~ 4,
+              . == "Slightly favor" ~ 3,
+              . == "Moderately favor" ~ 2,
+              . == "Strongly favor" ~ 1)) %>% 
+  # blm7 scale
+  mutate(blm7 = rowMeans(select(., starts_with("blm_fav_")), na.rm = TRUE)) %>% 
+  # favor police questions
+  mutate_at(.vars = c("police_fav_Yu_1", "police_fav_Yu_3", "police_fav_Yu_4", "police_fav_Yu_5"), 
+            ~case_when(
+              . == "Strongly oppose" ~ 1,
+              . == "Moderately oppose" ~ 2,
+              . == "Slightly oppose" ~ 3,
+              . == "Neither favor nor oppose" ~ 4,
+              . == "Slightly favor" ~ 5,
+              . == "Moderately favor" ~ 6,
+              . == "Strongly favor" ~ 7)) %>% 
+  # oppose police questions
+  mutate_at(.vars = c("police_fav_Yu_2", "police_fav_Yu_6", "police_fav_Yu_7", "police_fav_Yu_8", "police_fav_Yu_9"), 
+            ~case_when(
+              . == "Strongly oppose" ~ 7,
+              . == "Moderately oppose" ~ 6,
+              . == "Slightly oppose" ~ 5,
+              . == "Neither favor nor oppose" ~ 4,
+              . == "Slightly favor" ~ 3,
+              . == "Moderately favor" ~ 2,
+              . == "Strongly favor" ~ 1)) %>% 
+  # police_fav7 scale
+  mutate(police_fav7 = rowMeans(select(., starts_with("police_fav_")), na.rm = TRUE)) %>% 
+  # creating a logical variable representing which group of questions were asked first:
+  # blm or police
+  mutate(blm_first = (RO.BR.FL_31 == "BLM Favorability_Yu|Police Favorability_Yu")) %>% 
+  # Creating a birthyear variable
+  mutate(age = 2021 - Birth.Year) %>% 
+  # # creating a logical variable representing respondents from the US
+  # mutate(country_us = case_when(
+  #   Country == "United States of America" ~ TRUE,
+  #   is.na(Country) ~ NA,
+  #   TRUE ~ FALSE
+  # )) %>% 
+  # Coding education variable onto scale
+  mutate(educ = case_when(
+    Education %in% c("Less than Elementary school", "Elementary school", 
+                     "Middle school", "Some high school") ~ 1, # Didn't graduate HS
+    Education %in% c("High school graduate") ~ 2, # HS graduate
+    Education %in% c("Associate's Degree") ~ 3, # 2-year college
+    Education %in% c("B.A. or B.S.") ~ 4, # 4-year college
+    Education %in% c("Master's", "Ph.D.", "M.D.") ~ 5, # Postgraduate degree
+    TRUE ~ NA_real_
+  )) %>% 
+  # Coding a logical gender variable
+  mutate(female = case_when(
+    Gender == "Female" ~ TRUE,
+    Gender == "Male" ~ FALSE,
+    TRUE ~ NA
+  )) %>% 
+  # creating ideo7 scale
+  mutate(ideo7 = case_when(
+    Ideo.scale.lib == "Strong Liberal" ~ 1, # Strong Liberal
+    Ideo.scale.lib == "Lean Liberal"  ~ 2, # Lean Liberal
+    Ideo.scale.con == "Lean Conservative" ~ 6, # Lean Conservative
+    Ideo.scale.con == "Strong Conservative" ~ 7, # Strong Conservative
+    Ideo.scale.ind == "Lean Liberal" ~ 3, # Weak Liberal
+    Ideo.scale.ind == "Neither" ~ 4, # Independent
+    Ideo.scale.ind == "Lean Conservative" ~ 5, # Weak Conservative
+    TRUE ~ NA_real_
+  )) %>% 
+  # creating ideo3 scale
+  mutate(ideo3 = case_when(
+    Ideology == "Liberal" ~ 1, # Liberal
+    Ideology %in% c("Independnet", "Neither") ~ 2, #Independent
+    Ideology == "Conservative" ~ 3, # Conservative
+    TRUE ~ NA_real_
+  )) %>% 
+  # creating pid3
+  mutate(pid3 = case_when(
+    Party == "Democrat" | Party.2 == "Democrats" ~ 1,
+    Party == "Republican" | Party.2 == "Republicans" ~ 3,
+    Party == "Other" ~ 2,
+    TRUE ~ NA_real_
+  )) %>% 
+  # creating race variable
+  mutate(race = case_when(
+    Hispanic == "Yes" ~ 3, # Hispanic or Latino
+    Race == "Hispanic or Latino" ~ 3, # Hispanic or Latino
+    Race == "White" ~ 1, # White Non-Hispanic
+    Race %in% c("Black", "Black, African-American") ~ 2, # Black or African-American
+    Race %in% c("Asian", "Filipino") ~ 4, # Asian or Asian-American
+    Race == "Native American or American Indian" ~ 5, # Native American
+    Race == "Other" ~ 6, # Other
+    TRUE ~ NA_real_
+  )) %>% 
+  # Creating a salary scale
+  mutate(salary = case_when(
+    Salary %in% c("None or less than $2,999", "$3,000 -$4,999", 
+                  "$5,000 -$7,499", "$7,500 -$9,999") ~ 1, # Less than $10,000
+    Salary %in% c("$10,000 -$10,999", "$11,000-$12,499", "$12,500-$14,999",
+                  "$15,000-$16,999", "$17,000-$19,999") ~ 2, # $10,000 - $19,999
+    Salary %in% c("$20,000-$21,999", "$22,000-$24,999", 
+                  "$25,000-$29,999") ~ 3, # $20,000 - $29,999
+    Salary %in% c("$30,000-$34,999", "$35,000-$39,999") ~ 4, # $30,000 - $39,999
+    Salary %in% c("$40,000-$44,999", "$45,000-$49,999") ~ 5, # $40,000 - $49,999
+    Salary %in% c("$50,000-$59,999") ~ 6, # $50,000 - $59,999
+    Salary %in% c("$60,000-$74,999") ~ 7, # $60,000 - $74,999
+    Salary %in% c("$75,000-$89,999") ~ 8, # $75,000 - $89,999
+    Salary %in% c("$90,000-$99,999") ~ 9, # $90,000 - $99,999
+    Salary %in% c("$100,000-$109,999") ~ 10, # $100,000 - $109,999
+    Salary %in% c("$110,000-$119,999") ~ 11, # $110,000 - $119,999
+    Salary %in% c("$120,000-$134,999") ~ 13, # $120,000 - $134,999
+    Salary %in% c("$135,000-$149,999") ~ 14, # $135,000 - $149,999
+    Salary %in% c("$150,000 and over") ~ 15, # $150,000 and over
+    TRUE ~ NA_real_
+  ))
+
+data_final <- data_clean %>% 
+  select(sdo7, blm7, police_fav7, blm_first, female, age, educ, race, ideo7, ideo3, pid3, race, salary)
+```
+
+```{r dates, eval=FALSE}
+# Finding the dates of the first and last response to the survey
+dates <- data %>% 
+  mutate(V8 = as_datetime(mdy_hm(V8))) %>% 
+  pull(V8)
+
+c(min(dates), max(dates))
+```
+
+```{r network, eval=FALSE}
+# Creating a network graph to show my idea
+# create data:
+links <- tibble(
+  source = c("ideo", "ideo", "pid", "pid", "sdo", "sdo", "police", "blm"),
+  target = c("blm", "police", "blm", "police", "blm", "police", "blm", "police")
+  )
+
+# create the network object
+network <- graph_from_data_frame(links) 
+
+# Count the number of degree for each node:
+deg <- degree(network, mode="all")
+
+# plot it
+plot(network, vertex.size=deg*14, layout=layout.circle)
+```
+
+```{r imputation, eval=FALSE}
+# Imputing using MICE
+data_final_imputed <- data_final %>% 
+  mice(printFlag = FALSE) %>% 
+  complete() %>% 
+  as_tibble()
+
+# Models with MICE imputed data
+fit_1 <- lm(blm7 ~ blm_first + female + age + salary + educ + sdo7 + pid3 + ideo7 + police_fav7, data = data_final_imputed %>% filter(race == 1))
+fit_2 <- lm(police_fav7 ~ blm_first + female + age + salary + educ + sdo7 + pid3 + ideo7 + blm7, data = data_final_imputed %>% filter(race == 1))
+
+summary(fit_1)
+summary(fit_2)
+
+# Imputing using Amelia
+# data_final_imputed <- amelia(as.data.frame(data_final), m = 5)
+
+# Models with Amelia imputed data
+# b.out <- NULL
+# se.out <- NULL
+# for(i in seq_len(data_final_imputed$m)) {
+#   ols.out <- lm(police_fav7 ~ blm_first + female + age + salary + educ + sdo7 + pid3 + ideo7 + blm7, data = data_final_imputed$imputations[[i]] %>% filter(race == 1))
+#   b.out <- rbind(b.out, ols.out$coef)
+#   se.out <- rbind(se.out, coef(summary(ols.out))[, 2])
+# }
+# 
+# combined.results <- mi.meld(q = b.out, se = se.out)
+# combined.results
+```
